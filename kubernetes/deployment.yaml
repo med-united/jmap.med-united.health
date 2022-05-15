@@ -1,0 +1,131 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: jmap-certificate
+  namespace: default
+spec:
+  dnsNames:
+    - jmap.med-united.health
+  secretName: jmap-tls
+  issuerRef:
+    name: letsencrypt-cluster-issuer
+    kind: ClusterIssuer
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmap
+  labels:
+    app: jmap
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: jmap
+  template:
+    metadata:
+      labels:
+        app: jmap
+    spec:
+      containers:
+      - name: jmap
+        image: 765415433338.dkr.ecr.eu-central-1.amazonaws.com/jmap:$IMAGE_TAG
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 25
+          name: smtp
+        - containerPort: 8000
+          name: http
+        volumeMounts:
+          - mountPath: "/root/conf"
+            name: keystore
+            readOnly: true
+      volumes:
+        - name: keystore
+          secret:
+            secretName: jmap.med-united.health-keystore
+            items:
+            - key: jmap.med-united.health-keystore
+              path: keystore
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: jmap
+spec:
+  selector:
+    app: jmap
+  ports:
+    - port: 8000
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: smtp
+spec:
+  selector:
+    app: jmap
+  ports:
+    - port: 25
+
+---
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jmap
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/cors-allow-headers: Content-Type, Authorization, Cache-Control
+    nginx.ingress.kubernetes.io/cors-allow-methods: POST, GET, OPTIONS
+    nginx.ingress.kubernetes.io/cors-allow-origin: https://t2med.med-united.health
+    nginx.ingress.kubernetes.io/cors-expose-headers: X-Custom-Header
+    nginx.ingress.kubernetes.io/cors-max-age: "86400"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    nginx.org/client-max-body-size: "512m"
+spec:
+  tls:
+    - hosts:
+      - jmap.med-united.health
+      secretName: jmap-tls
+  rules:
+  - host: jmap.med-united.health
+    http:
+      paths:
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: jmap
+              port:
+                number: 8000
+--- 
+apiVersion: k8s.nginx.org/v1alpha1
+kind: GlobalConfiguration
+metadata:
+  name: nginx-configuration
+spec:
+  listeners:
+  - name: smtp-tcp
+    port: 25
+    protocol: TCP
+---
+apiVersion: k8s.nginx.org/v1alpha1
+kind: TransportServer
+metadata:
+  name: smtp-tcp
+spec:
+  listener:
+    name: smtp-tcp
+    protocol: TCP
+  upstreams:
+  - name: smtp
+    service: smtp
+    port: 25
+  action:
+    pass: smtp
